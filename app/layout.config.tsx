@@ -12,7 +12,7 @@ export const baseOptions: BaseLayoutProps = {
     },
     {
       text: 'GitHub',
-      url: 'https://github.com/AshwinSivakumar/audiocheckr',
+      url: 'https://github.com/abalajiksh/audiocheckr',
     },
   ],
 };
