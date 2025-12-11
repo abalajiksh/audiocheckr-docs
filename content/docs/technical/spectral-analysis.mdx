@@ -1,0 +1,489 @@
+---
+title: Spectral Analysis
+description: How AudioCheckr detects lossy codec transcodes through frequency analysis
+---
+
+# Spectral Analysis
+
+Spectral analysis is the primary method AudioCheckr uses to detect lossy-to-lossless transcodes. This page explains the algorithms and mathematics behind this detection.
+
+## The Problem: Lossy Codec Signatures
+
+Lossy audio codecs (MP3, AAC, Opus, Vorbis) work by removing audio information that's theoretically inaudible. A key technique is **frequency cutoff**—removing high frequencies entirely above a certain threshold.
+
+When such a file is converted to a lossless format (FLAC, WAV), this missing frequency content cannot be restored. AudioCheckr detects these telltale "holes" in the spectrum.
+
+### Typical Codec Cutoff Frequencies
+
+| Codec | Bitrate | Typical Cutoff |
+|-------|---------|---------------|
+| MP3 | 64 kbps | 11-12 kHz |
+| MP3 | 128 kbps | 15.5-16.5 kHz |
+| MP3 | 192 kbps | 18.5-19 kHz |
+| MP3 | 256 kbps | 19.5-20 kHz |
+| MP3 | 320 kbps | 20-20.5 kHz |
+| AAC | 128 kbps | 16-17 kHz |
+| AAC | 256 kbps | 19-20 kHz |
+| Opus | 64 kbps | 12-13 kHz |
+| Opus | 128 kbps | ~20 kHz |
+| Vorbis | Q3 (~112 kbps) | 16-17 kHz |
+| Vorbis | Q7 (~224 kbps) | 19-20 kHz |
+
+---
+
+## Spectral Analysis Algorithm
+
+### Overview
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│  Compute     │────▶│   Detect     │────▶│   Match      │
+│  Avg Spectrum│     │   Cutoff     │     │  Signature   │
+└──────────────┘     └──────────────┘     └──────────────┘
+       │                    │                    │
+       ▼                    ▼                    ▼
+   100 frames          30dB drop            Codec ID
+   4096 FFT           from peak           + Confidence
+   Hann window        Steepness
+```
+
+### Step 1: Compute Average Spectrum
+
+Rather than analyzing a single moment, we compute the average spectrum across multiple frames to get a stable representation:
+
+```rust
+fn compute_average_spectrum(&self, samples: &[f32]) -> Vec<f32> {
+    let mut planner = FftPlanner::new();
+    let fft = planner.plan_fft_forward(self.fft_size);
+    
+    let num_frames = ((samples.len() - self.fft_size) / self.hop_size + 1)
+        .min(100);  // Analyze up to 100 frames
+    
+    let spectrum_size = self.fft_size / 2;
+    let mut avg_spectrum = vec![0.0f32; spectrum_size];
+    
+    for i in 0..num_frames {
+        let start = i * self.hop_size;
+        
+        // Apply Hann window
+        let mut buffer: Vec<Complex<f32>> = (0..self.fft_size)
+            .map(|j| {
+                let sample = samples[start + j];
+                Complex::new(sample * self.window[j], 0.0)
+            })
+            .collect();
+        
+        fft.process(&mut buffer);
+        
+        // Accumulate magnitude
+        for (j, c) in buffer.iter().take(spectrum_size).enumerate() {
+            let mag = (c.re * c.re + c.im * c.im).sqrt();
+            avg_spectrum[j] += mag;
+        }
+    }
+    
+    // Average
+    for val in &mut avg_spectrum {
+        *val /= num_frames as f32;
+    }
+    
+    avg_spectrum
+}
+```
+
+**Parameters:**
+- FFT Size: 4096 samples
+- Hop Size: 1024 samples (75% overlap)
+- Window: Hann
+- Max Frames: 100
+
+### Step 2: Convert to dB Scale
+
+```rust
+fn to_db_spectrum(&self, spectrum: &[f32]) -> Vec<f32> {
+    spectrum.iter()
+        .map(|&mag| {
+            if mag > 1e-10 {
+                20.0 * mag.log10()
+            } else {
+                -200.0  // Floor for numerical stability
+            }
+        })
+        .collect()
+}
+```
+
+### Step 3: Detect Frequency Cutoff
+
+The cutoff detection algorithm finds where the spectrum drops significantly:
+
+```rust
+fn detect_frequency_cutoff(&self, spectrum_db: &[f32]) -> (f32, f32) {
+    let nyquist = self.sample_rate as f32 / 2.0;
+    let bin_width = nyquist / spectrum_db.len() as f32;
+    
+    // Skip low frequencies (below 1kHz)
+    let start_bin = (1000.0 / bin_width) as usize;
+    
+    // Smooth the spectrum (moving average, window=10)
+    let smoothed = self.smooth_spectrum(spectrum_db, 10);
+    
+    // Find peak level in mid-frequencies (1-10kHz)
+    let mid_end_bin = (10000.0 / bin_width) as usize;
+    let peak_level = smoothed[start_bin..mid_end_bin]
+        .iter()
+        .fold(f32::MIN, |a, &b| a.max(b));
+    
+    // Threshold: 30dB below peak
+    let threshold = peak_level - 30.0;
+    
+    // Search from high frequencies down
+    let mut cutoff_bin = spectrum_db.len() - 1;
+    for i in (start_bin..spectrum_db.len()).rev() {
+        if smoothed[i] > threshold {
+            cutoff_bin = i;
+            break;
+        }
+    }
+    
+    let cutoff_hz = cutoff_bin as f32 * bin_width;
+    let confidence = if cutoff_hz < nyquist * 0.95 { 0.8 } else { 0.3 };
+    
+    (cutoff_hz, confidence)
+}
+```
+
+**Algorithm Details:**
+
+1. **Skip DC and low frequencies**: Start analysis at 1kHz to avoid low-frequency noise
+2. **Find reference peak**: Maximum level in 1-10kHz range (where most music has energy)
+3. **Set threshold**: 30dB below the peak level
+4. **Scan from top down**: Find highest frequency still above threshold
+5. **Calculate confidence**: Higher if cutoff is well below Nyquist
+
+---
+
+## Rolloff Steepness Measurement
+
+Lossy codecs create characteristic "brick-wall" cutoffs with very steep rolloff. Natural audio has gradual rolloff.
+
+### Steepness in dB/Octave
+
+We measure how quickly the spectrum drops over one octave (doubling of frequency):
+
+$$
+\text{Steepness} = \frac{L(f_{cutoff}) - L(f_{cutoff}/2)}{1 \text{ octave}}
+$$
+
+```rust
+fn calculate_rolloff_steepness(&self, spectrum_db: &[f32], cutoff_hz: f32) -> f32 {
+    let nyquist = self.sample_rate as f32 / 2.0;
+    let bin_width = nyquist / spectrum_db.len() as f32;
+    
+    let cutoff_bin = (cutoff_hz / bin_width) as usize;
+    let octave_below_bin = (cutoff_hz / 2.0 / bin_width) as usize;
+    
+    if cutoff_bin <= octave_below_bin {
+        return 0.0;
+    }
+    
+    // Average levels around these points (±5 bins)
+    let level_at_cutoff = average_db(&spectrum_db, cutoff_bin, 5);
+    let level_below = average_db(&spectrum_db, octave_below_bin, 5);
+    
+    // dB difference over one octave
+    (level_below - level_at_cutoff).max(0.0)
+}
+
+fn average_db(spectrum_db: &[f32], center: usize, width: usize) -> f32 {
+    let start = center.saturating_sub(width);
+    let end = (center + width).min(spectrum_db.len());
+    spectrum_db[start..end].iter().sum::<f32>() / (end - start) as f32
+}
+```
+
+### Interpretation
+
+| Steepness | Interpretation |
+|-----------|---------------|
+| < 20 dB/oct | Natural rolloff (genuine lossless) |
+| 20-40 dB/oct | Suspicious, possible filtering |
+| 40-60 dB/oct | Likely lossy codec |
+| > 60 dB/oct | **Brick-wall filter** - definite lossy |
+
+---
+
+## Brick-Wall Detection
+
+A "brick-wall" filter is characterized by:
+1. Steep rolloff (>60 dB/octave)
+2. Cutoff well below Nyquist
+3. Sharp transition (not gradual)
+
+```rust
+let has_brick_wall = steepness > 60.0 && cutoff_hz < nyquist * 0.95;
+```
+
+**Visual Example:**
+
+```
+Genuine Lossless:               Lossy Transcode:
+                                
+    │╲                              │────╲
+    │  ╲                            │     │
+dB  │    ╲                      dB  │     │
+    │      ╲___                     │     └───
+    │                               │
+    └────────────               └────────────
+        Frequency                   Frequency
+    (gradual rolloff)           (brick-wall cutoff)
+```
+
+---
+
+## Codec Signature Matching
+
+Once we detect a cutoff, we match it against known codec signatures:
+
+```rust
+pub fn get_encoder_signatures() -> Vec<SpectralSignature> {
+    vec![
+        SpectralSignature {
+            name: "MP3 128kbps".to_string(),
+            cutoff_frequencies: vec![16000.0, 15500.0, 16500.0],
+            // ±500Hz tolerance
+        },
+        SpectralSignature {
+            name: "MP3 320kbps".to_string(),
+            cutoff_frequencies: vec![20000.0, 20500.0],
+        },
+        SpectralSignature {
+            name: "AAC 128kbps".to_string(),
+            cutoff_frequencies: vec![16000.0, 17000.0],
+        },
+        // ... more signatures
+    ]
+}
+
+fn match_codec_signature(
+    &self,
+    cutoff_hz: f32,
+    steepness: f32,
+    has_brick_wall: bool,
+    signatures: &[SpectralSignature],
+) -> (Option<String>, f32) {
+    let mut best_match: Option<String> = None;
+    let mut best_confidence = 0.0f32;
+    
+    for sig in signatures {
+        for &expected_cutoff in &sig.cutoff_frequencies {
+            let cutoff_diff = (cutoff_hz - expected_cutoff).abs();
+            let tolerance = expected_cutoff * 0.05; // 5% tolerance
+            
+            if cutoff_diff < tolerance && has_brick_wall {
+                let confidence = 1.0 - (cutoff_diff / tolerance);
+                if confidence > best_confidence {
+                    best_confidence = confidence;
+                    best_match = Some(sig.name.clone());
+                }
+            }
+        }
+    }
+    
+    (best_match, best_confidence)
+}
+```
+
+---
+
+## Spectral Flatness
+
+Spectral flatness helps distinguish between tonal content and noise, which can affect detection accuracy.
+
+### Wiener Entropy
+
+$$
+SF = \frac{\exp\left(\frac{1}{N}\sum_{k=0}^{N-1} \ln |X[k]|\right)}{\frac{1}{N}\sum_{k=0}^{N-1} |X[k]|}
+$$
+
+This simplifies to the ratio of geometric mean to arithmetic mean.
+
+```rust
+fn calculate_spectral_flatness(&self, spectrum: &[f32]) -> f32 {
+    let n = spectrum.len() as f32;
+    
+    // Geometric mean (via log)
+    let log_sum: f32 = spectrum.iter()
+        .map(|&m| (m + 1e-10).ln())
+        .sum();
+    let geometric_mean = (log_sum / n).exp();
+    
+    // Arithmetic mean
+    let arithmetic_mean = spectrum.iter().sum::<f32>() / n;
+    
+    if arithmetic_mean < 1e-10 {
+        return 0.0;
+    }
+    
+    (geometric_mean / arithmetic_mean).min(1.0)
+}
+```
+
+### Interpretation
+
+| Flatness | Spectrum Type | Example |
+|----------|--------------|---------|
+| ~1.0 | White noise | Noise, ambient |
+| 0.5-0.8 | Mixed | Most music |
+| 0.1-0.5 | Tonal | Synthesizers, pure tones |
+| <0.1 | Very tonal | Single notes, test tones |
+
+---
+
+## Spectral Rolloff Point
+
+The frequency below which 85% of spectral energy is contained:
+
+$$
+\sum_{k=0}^{R} |X[k]|^2 = 0.85 \cdot \sum_{k=0}^{N/2} |X[k]|^2
+$$
+
+```rust
+fn calculate_spectral_rolloff(&self, spectrum: &[f32], percentile: f32) -> f32 {
+    let nyquist = self.sample_rate as f32 / 2.0;
+    let bin_width = nyquist / spectrum.len() as f32;
+    
+    let total_energy: f32 = spectrum.iter().map(|m| m * m).sum();
+    let threshold = total_energy * percentile;
+    
+    let mut cumulative = 0.0f32;
+    for (i, &mag) in spectrum.iter().enumerate() {
+        cumulative += mag * mag;
+        if cumulative >= threshold {
+            return i as f32 * bin_width;
+        }
+    }
+    
+    nyquist
+}
+```
+
+The rolloff point provides an alternative measure of high-frequency content that's less sensitive to noise than peak detection.
+
+---
+
+## High Sample Rate Handling
+
+For high-resolution audio (88.2kHz, 96kHz, etc.), the detection logic is adjusted:
+
+### The Challenge
+
+At 96kHz sample rate:
+- Nyquist = 48kHz
+- A 20kHz MP3 cutoff is only 42% of Nyquist
+- Natural content may not extend to 48kHz
+
+### Adaptive Thresholds
+
+```rust
+// For high sample rate files (88.2kHz+)
+if sample_rate >= 88200 {
+    // Use absolute frequency thresholds, not ratios
+    match cutoff_hz {
+        c if c > 22000.0 => {
+            // Above CD Nyquist - probably genuine
+            return (false, low_confidence);
+        }
+        c if c > 20000.0 && c <= 22000.0 => {
+            // Suspicious zone - need strong evidence
+            require_brick_wall = true;
+            require_steepness = 80.0;
+        }
+        c if c > 18000.0 && c <= 20000.0 => {
+            // More suspicious
+            require_brick_wall = true;
+            require_steepness = 60.0;
+        }
+        _ => {
+            // Clear cutoff below 18kHz
+            // Match against codec signatures
+        }
+    }
+}
+```
+
+---
+
+## Complete Analysis Flow
+
+```rust
+pub fn analyze(&self, samples: &[f32]) -> SpectralAnalysis {
+    // Step 1: Compute average spectrum
+    let avg_spectrum = self.compute_average_spectrum(samples);
+    let spectrum_db = self.to_db_spectrum(&avg_spectrum);
+    
+    // Step 2: Detect cutoff
+    let (cutoff_hz, cutoff_confidence) = self.detect_frequency_cutoff(&spectrum_db);
+    
+    // Step 3: Calculate rolloff
+    let rolloff_hz = self.calculate_spectral_rolloff(&avg_spectrum, 0.85);
+    
+    // Step 4: Measure steepness
+    let steepness = self.calculate_rolloff_steepness(&spectrum_db, cutoff_hz);
+    
+    // Step 5: Detect brick-wall
+    let has_brick_wall = steepness > 60.0 && cutoff_hz < nyquist * 0.95;
+    
+    // Step 6: Calculate flatness
+    let flatness = self.calculate_spectral_flatness(&avg_spectrum);
+    
+    // Step 7: Match signatures
+    let (matched_sig, sig_confidence) = self.match_codec_signature(
+        cutoff_hz, steepness, has_brick_wall, &get_encoder_signatures()
+    );
+    
+    SpectralAnalysis {
+        frequency_cutoff: cutoff_hz,
+        spectral_rolloff: rolloff_hz,
+        rolloff_steepness: steepness,
+        has_brick_wall,
+        spectral_flatness: flatness,
+        matched_signature: matched_sig,
+        signature_confidence: sig_confidence,
+        evidence: self.build_evidence(...),
+    }
+}
+```
+
+---
+
+## Limitations and Edge Cases
+
+### High-Quality Transcodes
+
+320kbps MP3 and high-bitrate AAC have cutoffs very close to 20kHz, making them difficult to distinguish from genuine lossless.
+
+**Mitigation:** Require stronger evidence (brick-wall + high steepness) for high cutoff frequencies.
+
+### Band-Limited Source Material
+
+Some recordings legitimately have limited high-frequency content:
+- Older recordings
+- Recordings with low-pass filtering
+- Certain instruments/genres
+
+**Mitigation:** Use genre-aware profiles that adjust thresholds.
+
+### Electronic Music
+
+Synthesized audio may have intentional sharp cutoffs:
+- Low-pass filtered synths
+- Intentional frequency limiting
+
+**Mitigation:** Electronic profile reduces sensitivity to cutoffs, focuses on other artifacts.
+
+### Very Short Files
+
+Files under 5 seconds may not provide enough frames for reliable analysis.
+
+**Mitigation:** Reduce confidence for short files, recommend manual inspection.

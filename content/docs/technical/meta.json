@@ -1,0 +1,10 @@
+{
+  "title": "Technical Reference",
+  "pages": [
+    "index",
+    "dsp-fundamentals",
+    "spectral-analysis",
+    "bit-depth-detection",
+    "upsampling-detection"
+  ]
+}

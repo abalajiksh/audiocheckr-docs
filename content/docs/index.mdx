@@ -1,0 +1,54 @@
+---
+title: AudioCheckr Documentation
+description: Advanced audio analysis tool for detecting fake lossless files, transcodes, and upsampled audio
+---
+
+# AudioCheckr
+
+**AudioCheckr** is a sophisticated audio analysis tool that detects fake lossless files, transcoding artifacts, and quality issues using advanced DSP techniques. No machine learning required—just pure signal processing.
+
+## What Can AudioCheckr Detect?
+
+<Cards>
+  <Card title="Lossy Transcodes" href="/docs/usage/detection-types#lossy-transcodes">
+    Identify MP3, AAC, Opus, and Vorbis files that have been converted to lossless formats
+  </Card>
+  <Card title="Fake Bit Depth" href="/docs/usage/detection-types#bit-depth">
+    Detect 16-bit audio masquerading as 24-bit high-resolution files
+  </Card>
+  <Card title="Upsampling" href="/docs/usage/detection-types#upsampling">
+    Find audio that has been upsampled from lower sample rates
+  </Card>
+  <Card title="Codec Artifacts" href="/docs/usage/detection-types#artifacts">
+    Pre-echo, phase issues, joint stereo, and other compression artifacts
+  </Card>
+</Cards>
+
+## Quick Start
+
+```bash
+# Install from source
+git clone https://github.com/yourusername/audiocheckr
+cd audiocheckr
+cargo build --release
+
+# Analyze a file
+./target/release/audiocheckr -i music.flac
+
+# Analyze entire library
+./target/release/audiocheckr -i /path/to/music/ -v
+```
+
+## Documentation Sections
+
+| Section | Description |
+|---------|-------------|
+| [Usage Guide](/docs/usage) | How to use AudioCheckr for everyday analysis |
+| [Building](/docs/building) | Installation and compilation instructions |
+| [Technical Reference](/docs/technical) | Algorithms and math behind the detection |
+| [Code Documentation](/docs/code) | Developer guide and API reference |
+| [Testing Strategy](/docs/testing) | Test suites and CI/CD pipeline |
+
+## License
+
+AudioCheckr is released under the **GNU Affero General Public License v3.0** (AGPL-3.0).

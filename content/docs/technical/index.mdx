@@ -1,0 +1,119 @@
+---
+title: Technical Reference
+description: Deep dive into the algorithms, mathematics, and signal processing behind AudioCheckr
+---
+
+# Technical Reference
+
+This section provides a comprehensive explanation of the digital signal processing (DSP) algorithms and mathematics that power AudioCheckr's detection capabilities.
+
+## Overview
+
+AudioCheckr uses pure DSP techniques—no machine learning—to detect audio quality issues. The core principle is that lossy compression and improper format conversion leave detectable artifacts in the audio signal.
+
+### Signal Processing Pipeline
+
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│   Decode    │───▶│  Preprocess │───▶│   Analyze   │───▶│   Report    │
+│   Audio     │    │   Samples   │    │   Spectrum  │    │   Results   │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+       │                  │                  │                  │
+       ▼                  ▼                  ▼                  ▼
+   Symphonia         Windowing            FFT              Confidence
+   Decoder          Normalization    Spectral Analysis      Scoring
+```
+
+### Core Mathematical Concepts
+
+| Concept | Application in AudioCheckr |
+|---------|---------------------------|
+| Fourier Transform | Spectral analysis, frequency cutoff detection |
+| Windowing Functions | Reducing spectral leakage in STFT |
+| Statistical Analysis | Bit depth detection, histogram analysis |
+| Information Theory | Entropy calculation for bit depth validation |
+| Interpolation | True peak measurement, upsampling detection |
+
+## Documentation Sections
+
+<Cards>
+  <Card title="DSP Fundamentals" href="/docs/technical/dsp-fundamentals">
+    FFT, windowing, and core signal processing concepts
+  </Card>
+  <Card title="Spectral Analysis" href="/docs/technical/spectral-analysis">
+    Frequency cutoff detection and codec signature matching
+  </Card>
+  <Card title="Bit Depth Detection" href="/docs/technical/bit-depth-detection">
+    Multi-method approach to detecting fake 24-bit audio
+  </Card>
+  <Card title="Upsampling Detection" href="/docs/technical/upsampling-detection">
+    Identifying interpolated audio samples
+  </Card>
+</Cards>
+
+## Key Algorithms Summary
+
+### 1. Short-Time Fourier Transform (STFT)
+
+The foundation of spectral analysis. We compute FFT over overlapping windows to analyze frequency content over time:
+
+$$
+X[k, m] = \sum_{n=0}^{N-1} x[n + mH] \cdot w[n] \cdot e^{-j2\pi kn/N}
+$$
+
+Where:
+- $x[n]$ = input samples
+- $w[n]$ = window function (Hann)
+- $N$ = FFT size (4096)
+- $H$ = hop size (1024)
+- $m$ = frame index
+
+### 2. Lossy Codec Detection
+
+Lossy codecs remove high-frequency content. We detect this by:
+
+1. Computing average magnitude spectrum across frames
+2. Finding where spectrum drops significantly (30dB below peak)
+3. Measuring rolloff steepness (dB/octave)
+4. Matching against known codec signatures
+
+### 3. Bit Depth Analysis
+
+Fake 24-bit audio (upscaled from 16-bit) has telltale signs:
+
+1. **LSB Analysis**: Trailing zeros in sample values
+2. **Histogram Analysis**: Value clustering at 256-boundaries
+3. **Quantization Noise**: Noise floor characteristics
+4. **Entropy Analysis**: Lower 8-bit distribution
+
+### 4. Upsampling Detection
+
+Upsampled audio lacks genuine high-frequency content:
+
+1. **Spectral Null Detection**: Energy void at original Nyquist
+2. **Inter-sample Analysis**: True high-res has inter-sample peaks
+3. **Nyquist Mirror Detection**: Aliasing artifacts
+
+## Mathematical Notation
+
+Throughout this documentation:
+
+| Symbol | Meaning |
+|--------|---------|
+| $x[n]$ | Discrete-time signal sample at index $n$ |
+| $X[k]$ | DFT coefficient at frequency bin $k$ |
+| $f_s$ | Sample rate (Hz) |
+| $f_N$ | Nyquist frequency = $f_s / 2$ |
+| $N$ | FFT size / window length |
+| $\|X[k]\|$ | Magnitude of complex FFT bin |
+| $dB$ | Decibels: $20 \log_{10}(\text{ratio})$ |
+
+## References
+
+The algorithms in AudioCheckr are based on established DSP literature:
+
+1. **ITU-R BS.1770** - True peak measurement standard
+2. **AES17** - Standard method for measuring peak level
+3. **Julius O. Smith** - *Digital Audio Signal Processing*
+4. **Udo Zölzer** - *DAFX: Digital Audio Effects*
+5. **Hydrogenaudio Wiki** - Lossy codec detection techniques
