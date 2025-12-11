@@ -3,6 +3,8 @@
   "version": "0.3.0",
   "private": true,
   "scripts": {
+    "prebuild": "fumadocs-mdx",
+    "predev": "fumadocs-mdx",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
