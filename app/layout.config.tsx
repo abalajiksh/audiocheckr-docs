@@ -1,4 +1,4 @@
-import type { BaseLayoutProps } from 'fumadocs-ui/layout';
+import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
 
 export const baseOptions: BaseLayoutProps = {
   nav: {
@@ -12,7 +12,7 @@ export const baseOptions: BaseLayoutProps = {
     },
     {
       text: 'GitHub',
-      url: 'https://github.com/yourusername/audiocheckr',
+      url: 'https://github.com/AshwinSivakumar/audiocheckr',
     },
   ],
 };
