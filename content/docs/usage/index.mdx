@@ -1,297 +1,32 @@
 ---
 title: Usage Guide
-description: Learn how to use AudioCheckr to analyze your audio files
+description: Learn how to use AudioCheckr
 ---
 
 # Usage Guide
 
-AudioCheckr is a command-line tool designed to help you identify fake lossless audio files in your collection. Whether you're an audiophile verifying downloads or a music archivist ensuring quality, this guide will help you get started.
-
 ## Basic Usage
-
-### Analyzing a Single File
-
-The simplest way to use AudioCheckr is to point it at a single audio file:
 
 ```bash
 audiocheckr -i song.flac
-```
-
-This will output a quality report showing:
-- File metadata (sample rate, bit depth, channels)
-- Detected frequency cutoff
-- Quality score (0-100%)
-- Any detected defects
-
-### Analyzing a Directory
-
-To scan an entire music library or folder:
-
-```bash
 audiocheckr -i /path/to/music/
 ```
 
-AudioCheckr will recursively scan for supported audio files and analyze each one.
-
-### Supported Formats
-
-AudioCheckr can analyze the following audio formats:
-
-| Format | Extension | Notes |
-|--------|-----------|-------|
-| FLAC | `.flac` | Recommended for lossless analysis |
-| WAV | `.wav` | Full support |
-| AIFF | `.aiff`, `.aif` | Full support |
-| Apple Lossless | `.m4a` (ALAC) | Full support |
-| WavPack | `.wv` | Full support |
-| Monkey's Audio | `.ape` | Full support |
-| MP3 | `.mp3` | For reference/comparison |
-| AAC | `.aac`, `.m4a` | For reference/comparison |
-| Ogg Vorbis | `.ogg` | For reference/comparison |
-| Opus | `.opus` | For reference/comparison |
-
 ## Command Line Options
 
-### Essential Options
-
 ```bash
-audiocheckr [OPTIONS]
-
-Options:
-  -i, --input <PATH>      Input file or directory [default: .]
-  -b, --bit-depth <N>     Expected bit depth (16 or 24) [default: 24]
-  -v, --verbose           Show detailed analysis output
-  --json                  Output results as JSON
-  -h, --help              Show help information
-  --version               Show version number
+-i, --input <PATH>      Input file or directory
+-v, --verbose           Show detailed output
+--json                  Output results as JSON
+-u, --check-upsampling  Enable upsampling detection
+--profile <NAME>        Detection profile
 ```
 
-### Analysis Options
-
-```bash
-  -u, --check-upsampling  Enable upsampling detection
-  --stereo                Enable stereo field analysis
-  --transients            Enable pre-echo/transient analysis
-  --phase                 Enable phase analysis (slower)
-  -q, --quick             Skip slower analyses for faster results
-  --min-confidence <N>    Minimum confidence threshold [default: 0.5]
-```
-
-### Spectrogram Options
-
-```bash
-  -s, --spectrogram       Generate spectrogram images
-  --linear-scale          Use linear frequency scale (default: mel)
-  --full-spectrogram      Generate full-length spectrogram
-  -o, --output <MODE>     Output: "source", "current", or path
-```
-
-### Profile Options
-
-```bash
-  --profile <NAME>        Detection profile (see below)
-  --disable <LIST>        Disable specific detectors (comma-separated)
-  --show-suppressed       Show findings suppressed by profile
-```
-
-## Detection Profiles
-
-AudioCheckr includes genre-aware profiles that adjust detection sensitivity to reduce false positives:
-
-### Standard (Default)
-```bash
-audiocheckr -i file.flac --profile standard
-```
-Balanced defaults suitable for most music.
-
-### High-Resolution
-```bash
-audiocheckr -i file.flac --profile highres
-```
-For verified high-resolution sources. Reduces sensitivity to natural high-frequency rolloff.
-
-### Electronic
-```bash
-audiocheckr -i edm_track.flac --profile electronic
-```
-Optimized for EDM, synthwave, and electronic music. Tolerates intentional sharp frequency cutoffs and disables pre-echo detection (synthesizers don't produce natural transients).
-
-### Noise/Ambient
-```bash
-audiocheckr -i drone_album.flac --profile noise
-```
-For ambient, drone, and noise music. Expects full-spectrum content and unusual stereo characteristics.
-
-### Classical
-```bash
-audiocheckr -i symphony.flac --profile classical
-```
-For orchestral and acoustic recordings. Stricter dynamic range and bit depth checking.
-
-### Podcast
-```bash
-audiocheckr -i podcast.flac --profile podcast
-```
-For speech content. Disables most detectors except bit depth and codec signature analysis.
-
-## Understanding the Output
-
-### Quality Score
-
-The quality score is a percentage from 0-100%:
+## Quality Score
 
 | Score | Interpretation |
 |-------|----------------|
 | 90-100% | Likely genuine lossless |
-| 70-90% | Possibly lossless but has some concerns |
-| 50-70% | Suspicious—likely transcoded |
-| 0-50% | Almost certainly transcoded or fake |
-
-### Status Indicators
-
-```
-✓ CLEAN - No issues detected
-✗ ISSUES DETECTED - Problems found (see defects list)
-```
-
-### Example Output
-
-```
-Analyzing: /music/album/track01.flac
-  Sample Rate: 96000 Hz
-  Bit Depth: 24 bit (claimed: 24)
-  Channels: 2
-  Duration: 245.32s
-  Frequency Cutoff: 48000 Hz
-  Dynamic Range: 14.2 dB
-  Quality Score: 95% (likely lossless)
-  Status: ✓ CLEAN - No issues detected
-```
-
-### Verbose Output
-
-Use `-v` or `--verbose` for detailed technical information:
-
-```bash
-audiocheckr -i file.flac -v
-```
-
-This shows additional information including:
-- Spectral rolloff frequency and steepness
-- Brick-wall cutoff detection
-- Individual bit depth analysis method results
-- Pre-echo and transient analysis
-- Stereo width and correlation
-
-## Generating Spectrograms
-
-Visual inspection can help verify detection results:
-
-```bash
-# Generate mel-scale spectrogram (perceptual)
-audiocheckr -i file.flac -s
-
-# Generate linear-scale spectrogram (technical)
-audiocheckr -i file.flac -s --linear-scale
-
-# Full-length spectrogram (instead of first 15 seconds)
-audiocheckr -i file.flac -s --full-spectrogram
-
-# Save to specific directory
-audiocheckr -i file.flac -s -o /path/to/output/
-```
-
-Spectrograms are saved as PNG files with `_spectrogram.png` suffix.
-
-## JSON Output
-
-For scripting and automation:
-
-```bash
-audiocheckr -i /music/ --json > results.json
-```
-
-JSON structure:
-```json
-{
-  "files_analyzed": 42,
-  "results": [
-    {
-      "file": "/music/track.flac",
-      "sample_rate": 44100,
-      "channels": 2,
-      "claimed_bit_depth": 24,
-      "actual_bit_depth": 16,
-      "duration_secs": 180.5,
-      "frequency_cutoff": 16000,
-      "quality_score": 0.45,
-      "is_likely_lossless": false,
-      "defects": [
-        {
-          "type": "MP3 Transcode",
-          "confidence": 0.85,
-          "evidence": ["Cutoff at 16kHz", "Brick-wall filter detected"]
-        }
-      ]
-    }
-  ]
-}
-```
-
-## Common Workflows
-
-### Verifying New Downloads
-
-```bash
-# Quick check with upsampling detection
-audiocheckr -i ~/Downloads/new_album/ -u
-
-# Full analysis with spectrogram
-audiocheckr -i ~/Downloads/new_album/ -u --stereo --transients -s -v
-```
-
-### Scanning Music Library
-
-```bash
-# Quick scan of entire library
-audiocheckr -i /music/ --json > library_report.json
-
-# Find only problematic files
-audiocheckr -i /music/ --json | jq '.results[] | select(.is_likely_lossless == false)'
-```
-
-### Batch Processing with Profiles
-
-```bash
-# Electronic music folder
-audiocheckr -i /music/electronic/ --profile electronic
-
-# Classical music folder
-audiocheckr -i /music/classical/ --profile classical
-```
-
-## Tips and Best Practices
-
-### Reducing False Positives
-
-1. **Use appropriate profiles** for different genres
-2. **Check spectrograms** for visual confirmation
-3. **Use verbose mode** to see individual detector results
-4. **Adjust minimum confidence** if too many borderline cases
-
-### Performance Tips
-
-1. **Use quick mode** (`-q`) for initial scans
-2. **Skip phase analysis** unless specifically needed
-3. **Limit spectrogram generation** to suspicious files
-4. **Use JSON output** for batch processing
-
-### Understanding Limitations
-
-AudioCheckr may have difficulty detecting:
-- Very high-quality transcodes (320kbps MP3)
-- Sophisticated modern upsampling algorithms
-- Files shorter than 5 seconds
-- Synthesized/electronic music with unusual characteristics
-
-When in doubt, generate a spectrogram for visual inspection or consult the verbose output for more details.
+| 70-90% | Possibly lossless |
+| 50-70% | Suspicious |
+| 0-50% | Almost certainly transcoded |

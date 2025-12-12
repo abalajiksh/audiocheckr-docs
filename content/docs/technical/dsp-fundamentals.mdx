@@ -1,492 +1,72 @@
 ---
 title: DSP Fundamentals
-description: Core digital signal processing concepts used in AudioCheckr
+description: Core DSP concepts
 ---
 
 # DSP Fundamentals
 
-This page covers the fundamental digital signal processing concepts that form the foundation of AudioCheckr's analysis capabilities.
+## Discrete Fourier Transform
 
-## The Discrete Fourier Transform (DFT)
+The DFT converts time-domain signals to frequency domain:
 
-The Discrete Fourier Transform converts a signal from the time domain to the frequency domain, revealing its spectral content.
-
-### Mathematical Definition
-
-For a discrete signal $x[n]$ of length $N$, the DFT is defined as:
-
-$$
-X[k] = \sum_{n=0}^{N-1} x[n] \cdot e^{-j2\pi kn/N}
-$$
+```
+X[k] = Σ x[n] · e^(-j2πkn/N)  for n = 0 to N-1
+```
 
 Where:
-- $X[k]$ is the complex frequency-domain representation at bin $k$
-- $x[n]$ is the time-domain sample at index $n$
-- $N$ is the total number of samples (FFT size)
-- $k$ ranges from $0$ to $N-1$
+- X[k] is the frequency-domain representation at bin k
+- x[n] is the time-domain sample at index n
+- N is the FFT size
 
-### Frequency Resolution
+## FFT Size Selection
+
+| Size | Resolution (44.1kHz) | Time Resolution |
+|------|---------------------|-----------------|
+| 1024 | 43.1 Hz | 23.2 ms |
+| 2048 | 21.5 Hz | 46.4 ms |
+| **4096** | **10.8 Hz** | **92.9 ms** |
+| 8192 | 5.4 Hz | 185.8 ms |
+
+## Frequency Resolution
 
 Each FFT bin corresponds to a specific frequency:
 
-$$
-f_k = \frac{k \cdot f_s}{N}
-$$
+```
+f_k = (k × f_s) / N
+```
 
-Where:
-- $f_k$ = frequency at bin $k$ (Hz)
-- $f_s$ = sample rate (Hz)
-- $N$ = FFT size
+Where f_s is the sample rate and N is the FFT size.
 
-**Example**: For 44.1kHz audio with FFT size 4096:
+**Example** for 44.1kHz with FFT size 4096:
 - Bin 0 = 0 Hz (DC)
 - Bin 1 = 10.77 Hz
 - Bin 2048 = 22050 Hz (Nyquist)
 
-### Magnitude and Phase
-
-The complex DFT output contains both magnitude and phase:
-
-$$
-|X[k]| = \sqrt{\text{Re}(X[k])^2 + \text{Im}(X[k])^2}
-$$
-
-$$
-\phi[k] = \arctan\left(\frac{\text{Im}(X[k])}{\text{Re}(X[k])}\right)
-$$
-
-AudioCheckr primarily uses magnitude for spectral analysis, but phase is used for codec artifact detection.
-
-### Power Spectrum in Decibels
-
-For visualization and threshold comparison, we convert to decibels:
-
-$$
-P_{dB}[k] = 20 \cdot \log_{10}(|X[k]|)
-$$
-
-This logarithmic scale better matches human perception of loudness.
-
----
-
-## Fast Fourier Transform (FFT)
-
-AudioCheckr uses the FFT algorithm (via the `rustfft` crate) which computes the DFT efficiently in $O(N \log N)$ time instead of $O(N^2)$.
-
-### Implementation in AudioCheckr
-
-```rust
-// From src/core/dsp/fft.rs
-use rustfft::{FftPlanner, num_complex::Complex};
-
-pub struct FftProcessor {
-    planner: FftPlanner<f32>,
-    window: Vec<f32>,
-    fft_size: usize,
-}
-
-impl FftProcessor {
-    pub fn magnitude_spectrum(&mut self, samples: &[f32]) -> Vec<f32> {
-        let fft = self.planner.plan_fft_forward(self.fft_size);
-        
-        // Apply window and convert to complex
-        let mut buffer: Vec<Complex<f32>> = samples
-            .iter()
-            .enumerate()
-            .map(|(i, &s)| Complex::new(s * self.window[i], 0.0))
-            .collect();
-        
-        fft.process(&mut buffer);
-        
-        // Extract magnitude (first half only - positive frequencies)
-        buffer[..self.fft_size / 2]
-            .iter()
-            .map(|c| (c.re * c.re + c.im * c.im).sqrt())
-            .collect()
-    }
-}
-```
-
-### FFT Size Selection
-
-AudioCheckr uses an FFT size of **4096 samples** by default:
-
-| FFT Size | Freq Resolution (44.1kHz) | Time Resolution | Use Case |
-|----------|--------------------------|-----------------|----------|
-| 1024 | 43.1 Hz | 23.2 ms | Fast, low resolution |
-| 2048 | 21.5 Hz | 46.4 ms | Balanced |
-| **4096** | **10.8 Hz** | **92.9 ms** | **Default - good resolution** |
-| 8192 | 5.4 Hz | 185.8 ms | High resolution, slow |
-
-The 4096-sample FFT provides ~10.8 Hz resolution at 44.1kHz, sufficient to detect codec cutoff frequencies accurately.
-
----
-
-## Window Functions
-
-### The Spectral Leakage Problem
-
-When analyzing a finite segment of audio, the abrupt start and end of the segment create artificial high-frequency components (spectral leakage).
-
-### Solution: Windowing
-
-A window function smoothly tapers the signal to zero at the edges:
-
-$$
-x_{windowed}[n] = x[n] \cdot w[n]
-$$
-
-### Window Functions in AudioCheckr
-
-AudioCheckr supports several window types:
-
-#### Hann Window (Default)
-
-$$
-w[n] = 0.5 \left(1 - \cos\left(\frac{2\pi n}{N}\right)\right)
-$$
-
-**Properties:**
-- Good frequency resolution
-- -31.5 dB first sidelobe
-- Commonly used for general spectral analysis
-
-#### Hamming Window
-
-$$
-w[n] = 0.54 - 0.46 \cos\left(\frac{2\pi n}{N}\right)
-$$
-
-**Properties:**
-- Slightly better sidelobe suppression (-43 dB)
-- Doesn't taper to exactly zero at edges
-
-#### Blackman Window
-
-$$
-w[n] = 0.42 - 0.5 \cos\left(\frac{2\pi n}{N}\right) + 0.08 \cos\left(\frac{4\pi n}{N}\right)
-$$
-
-**Properties:**
-- Excellent sidelobe suppression (-58 dB)
-- Wider main lobe (reduced frequency resolution)
-
-#### Blackman-Harris Window
-
-$$
-w[n] = 0.35875 - 0.48829 \cos\left(\frac{2\pi n}{N}\right) + 0.14128 \cos\left(\frac{4\pi n}{N}\right) - 0.01168 \cos\left(\frac{6\pi n}{N}\right)
-$$
-
-**Properties:**
-- Very low sidelobes (-92 dB)
-- Best for detecting weak signals near strong ones
-
-### Implementation
-
-```rust
-// From src/core/dsp/windows.rs
-pub fn create_window(size: usize, window_type: WindowType) -> Vec<f32> {
-    let n = size as f32;
-    (0..size)
-        .map(|i| {
-            let x = i as f32;
-            match window_type {
-                WindowType::Hann => {
-                    0.5 * (1.0 - (2.0 * PI * x / n).cos())
-                }
-                WindowType::Blackman => {
-                    0.42 - 0.5 * (2.0 * PI * x / n).cos() 
-                        + 0.08 * (4.0 * PI * x / n).cos()
-                }
-                // ... other windows
-            }
-        })
-        .collect()
-}
-```
-
----
-
-## Short-Time Fourier Transform (STFT)
-
-Real-world audio changes over time. The STFT analyzes how frequency content evolves by computing FFTs on overlapping windows.
-
-### Algorithm
-
-1. Divide signal into overlapping frames
-2. Apply window function to each frame
-3. Compute FFT of each windowed frame
-4. Store magnitude (and optionally phase)
-
-### Parameters
-
-| Parameter | AudioCheckr Default | Description |
-|-----------|-------------------|-------------|
-| FFT Size | 4096 | Samples per FFT |
-| Hop Size | 1024 | Samples between frames |
-| Overlap | 75% | $(N - H) / N$ |
-| Window | Hann | Smoothing function |
-
-### Implementation
-
-```rust
-// Compute average spectrum across multiple frames
-fn compute_average_spectrum(&self, samples: &[f32]) -> Vec<f32> {
-    let num_frames = (samples.len() - self.fft_size) / self.hop_size + 1;
-    let num_frames = num_frames.min(100); // Limit for efficiency
-    
-    let spectrum_size = self.fft_size / 2;
-    let mut avg_spectrum = vec![0.0f32; spectrum_size];
-    
-    for i in 0..num_frames {
-        let start = i * self.hop_size;
-        
-        // Window and FFT this frame
-        let frame_spectrum = self.compute_frame_spectrum(&samples[start..]);
-        
-        // Accumulate
-        for (j, &mag) in frame_spectrum.iter().enumerate() {
-            avg_spectrum[j] += mag;
-        }
-    }
-    
-    // Average
-    for val in &mut avg_spectrum {
-        *val /= num_frames as f32;
-    }
-    
-    avg_spectrum
-}
-```
-
-### Time-Frequency Trade-off
-
-There's a fundamental trade-off between time and frequency resolution:
-
-$$
-\Delta t \cdot \Delta f \geq \frac{1}{4\pi}
-$$
-
-- **Larger FFT**: Better frequency resolution, worse time resolution
-- **Smaller FFT**: Better time resolution, worse frequency resolution
-
-AudioCheckr's 4096-sample FFT prioritizes frequency resolution, which is critical for detecting codec cutoff frequencies.
-
----
-
 ## Decibel Calculations
 
-### Amplitude to dB
+Amplitude to dB conversion:
 
-$$
-L_{dB} = 20 \cdot \log_{10}\left(\frac{A}{A_{ref}}\right)
-$$
-
-Where $A_{ref} = 1.0$ for normalized audio:
-
-```rust
-pub fn amplitude_to_db(amplitude: f32) -> f32 {
-    if amplitude > 1e-10 {
-        20.0 * amplitude.log10()
-    } else {
-        -200.0  // Effectively silence
-    }
-}
 ```
-
-### dB to Amplitude
-
-$$
-A = 10^{L_{dB} / 20}
-$$
-
-```rust
-pub fn db_to_amplitude(db: f32) -> f32 {
-    10.0_f32.powf(db / 20.0)
-}
+L_dB = 20 × log₁₀(A / A_ref)
 ```
-
-### Common dB Values
 
 | dB | Linear Ratio | Meaning |
 |----|--------------|---------|
 | 0 dB | 1.0 | Full scale |
 | -6 dB | 0.5 | Half amplitude |
 | -20 dB | 0.1 | 10% amplitude |
-| -60 dB | 0.001 | 0.1% amplitude |
 | -96 dB | ~0.000016 | 16-bit noise floor |
 | -144 dB | ~0.000000006 | 24-bit noise floor |
 
----
+## Window Functions
 
-## RMS and Peak Measurements
+### Hann Window (Default)
 
-### Root Mean Square (RMS)
-
-RMS represents the average "power" of a signal:
-
-$$
-\text{RMS} = \sqrt{\frac{1}{N} \sum_{n=0}^{N-1} x[n]^2}
-$$
-
-```rust
-pub fn rms(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    let sum_sq: f32 = samples.iter().map(|s| s * s).sum();
-    (sum_sq / samples.len() as f32).sqrt()
-}
+```
+w[n] = 0.5 × (1 - cos(2πn/N))
 ```
 
-### Peak Amplitude
-
-The maximum absolute sample value:
-
-$$
-\text{Peak} = \max_{n} |x[n]|
-$$
-
-```rust
-pub fn peak_amplitude(samples: &[f32]) -> f32 {
-    samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max)
-}
-```
-
-### Crest Factor
-
-The ratio of peak to RMS (indicates dynamic range):
-
-$$
-\text{Crest Factor}_{dB} = 20 \cdot \log_{10}\left(\frac{\text{Peak}}{\text{RMS}}\right)
-$$
-
-Typical values:
-- Sine wave: 3 dB
-- Music: 12-20 dB
-- Heavily compressed: 6-10 dB
-
----
-
-## Nyquist Theorem
-
-### The Sampling Theorem
-
-A continuous signal can be perfectly reconstructed from its samples if:
-
-$$
-f_s > 2 \cdot f_{max}
-$$
-
-Where:
-- $f_s$ = sample rate
-- $f_{max}$ = highest frequency in the signal
-
-### Nyquist Frequency
-
-The highest frequency that can be represented at a given sample rate:
-
-$$
-f_N = \frac{f_s}{2}
-$$
-
-| Sample Rate | Nyquist Frequency |
-|-------------|-------------------|
-| 44.1 kHz | 22.05 kHz |
-| 48 kHz | 24 kHz |
-| 96 kHz | 48 kHz |
-| 192 kHz | 96 kHz |
-
-### Relevance to AudioCheckr
-
-- **Codec Detection**: Lossy codecs remove frequencies above their cutoff, which is always below Nyquist
-- **Upsampling Detection**: Upsampled audio has no genuine content above the original Nyquist frequency
-
----
-
-## Mel Scale
-
-The mel scale is a perceptual scale of pitches judged by listeners to be equal in distance from one another.
-
-### Frequency to Mel
-
-$$
-m = 2595 \cdot \log_{10}\left(1 + \frac{f}{700}\right)
-$$
-
-### Mel to Frequency
-
-$$
-f = 700 \cdot \left(10^{m/2595} - 1\right)
-$$
-
-### Implementation
-
-```rust
-fn freq_to_mel(freq: f32) -> f32 {
-    2595.0 * (1.0 + freq / 700.0).log10()
-}
-
-fn mel_to_freq(mel: f32) -> f32 {
-    700.0 * (10.0_f32.powf(mel / 2595.0) - 1.0)
-}
-```
-
-### Use in AudioCheckr
-
-The mel scale is used for:
-- **Spectrogram generation**: Mel-scale spectrograms better represent perceived frequency content
-- **Perceptual weighting**: Lower frequencies are weighted appropriately
-
----
-
-## Spectral Features
-
-AudioCheckr computes several spectral features for analysis:
-
-### Spectral Centroid
-
-The "center of mass" of the spectrum—indicates brightness:
-
-$$
-SC = \frac{\sum_{k=0}^{N/2} f_k \cdot |X[k]|}{\sum_{k=0}^{N/2} |X[k]|}
-$$
-
-### Spectral Spread
-
-The standard deviation around the centroid—indicates bandwidth:
-
-$$
-SS = \sqrt{\frac{\sum_{k=0}^{N/2} (f_k - SC)^2 \cdot |X[k]|}{\sum_{k=0}^{N/2} |X[k]|}}
-$$
-
-### Spectral Flatness (Wiener Entropy)
-
-Indicates how noise-like vs. tonal the spectrum is:
-
-$$
-SF = \frac{\sqrt[N]{\prod_{k=0}^{N-1} |X[k]|}}{\frac{1}{N}\sum_{k=0}^{N-1} |X[k]|} = \frac{\text{Geometric Mean}}{\text{Arithmetic Mean}}
-$$
-
-- $SF \approx 1$: White noise (flat spectrum)
-- $SF \approx 0$: Tonal (peaks in spectrum)
-
-### Spectral Rolloff
-
-The frequency below which a percentage (typically 85%) of the spectral energy is contained:
-
-$$
-\sum_{k=0}^{k_{rolloff}} |X[k]|^2 = 0.85 \cdot \sum_{k=0}^{N/2} |X[k]|^2
-$$
-
-This is useful for detecting frequency cutoffs from lossy compression.
-
-### Spectral Flux
-
-Frame-to-frame spectral change—useful for transient detection:
-
-$$
-SF_m = \sqrt{\sum_{k=0}^{N/2} \left(|X[k,m]| - |X[k,m-1]|\right)^2}
-$$
-
-Where only positive differences (onset detection) may be considered.
+Properties:
+- Good frequency resolution
+- -31.5 dB first sidelobe
+- Commonly used for general spectral analysis
